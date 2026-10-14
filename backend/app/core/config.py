@@ -1,11 +1,13 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     app_env: str = "development"
     database_url: str = "sqlite:///./shahil_academy.db"
-    supabase_url: str = ""
-    supabase_jwt_secret: str = ""
+    jwt_secret_key: str = ""
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = Field(default=60, gt=0)
     cors_origins: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -16,4 +18,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

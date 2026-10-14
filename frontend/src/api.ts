@@ -1,15 +1,15 @@
 import axios from "axios";
-import { supabase } from "./auth";
+import { getAccessToken } from "./auth-token";
 
 export const api = axios.create({
   baseURL: `${import.meta.env.VITE_API_URL || "http://localhost:8000"}/api/v1`,
   headers: { "Content-Type": "application/json" },
 });
 
-api.interceptors.request.use(async (config) => {
-  const { data } = await supabase?.auth.getSession() ?? { data: { session: null } };
-  if (data.session?.access_token) {
-    config.headers.Authorization = `Bearer ${data.session.access_token}`;
+api.interceptors.request.use((config) => {
+  const token = getAccessToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
 });
@@ -22,7 +22,17 @@ export async function apiData<T>(request: Promise<{ data: T }>): Promise<T> {
 export function errorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     const detail = error.response?.data?.detail;
-    return typeof detail === "string" ? detail : error.message;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      return detail.map((item: unknown) => {
+        if (!item || typeof item !== "object") return String(item);
+        const issue = item as { loc?: unknown[]; msg?: unknown };
+        const field = Array.isArray(issue.loc) ? issue.loc.slice(1).join(".") : "";
+        const message = typeof issue.msg === "string" ? issue.msg : "Invalid value";
+        return field ? `${field}: ${message}` : message;
+      }).join("; ");
+    }
+    return error.message;
   }
   return error instanceof Error ? error.message : "Something went wrong.";
 }
@@ -45,4 +55,3 @@ export type Doubt = {
   message: string; status: string; created_at: string;
   replies: { id: string; author_name: string; message: string; created_at: string }[];
 };
-

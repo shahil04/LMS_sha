@@ -1,11 +1,10 @@
-import { createClient, type Session, type SupabaseClient } from "@supabase/supabase-js";
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import axios from "axios";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, apiData, type UserProfile } from "./api";
+import { clearAccessToken, getAccessToken, setAccessToken } from "./auth-token";
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-export const supabase: SupabaseClient | null =
-  supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
+type Session = { access_token: string };
+type AuthResponse = { access_token: string; profile: UserProfile };
 
 type AuthValue = {
   session: Session | null;
@@ -13,6 +12,8 @@ type AuthValue = {
   loading: boolean;
   configured: boolean;
   refreshProfile: () => Promise<UserProfile | null>;
+  signIn: (email: string, password: string) => Promise<UserProfile>;
+  register: (fullName: string, email: string, password: string) => Promise<UserProfile>;
   signOut: () => Promise<void>;
 };
 
@@ -23,51 +24,66 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const refreshProfile = async () => {
-    if (!supabase) return null;
-    const current = await supabase.auth.getSession();
-    if (!current.data.session) {
+  const refreshProfile = useCallback(async () => {
+    if (!getAccessToken()) {
       setProfile(null);
       return null;
     }
-    const result = await apiData<UserProfile>(api.get("/auth/me"));
-    setProfile(result);
-    return result;
-  };
+    try {
+      const result = await apiData<UserProfile>(api.get("/auth/me"));
+      setProfile(result);
+      return result;
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 401) {
+        clearAccessToken();
+        setSession(null);
+        setProfile(null);
+      }
+      throw error;
+    }
+  }, []);
+
+  const acceptAuthResponse = useCallback((result: AuthResponse) => {
+    setAccessToken(result.access_token);
+    setSession({ access_token: result.access_token });
+    setProfile(result.profile);
+    return result.profile;
+  }, []);
+
+  const signIn = useCallback(async (email: string, password: string) => {
+    const result = await apiData<AuthResponse>(api.post("/auth/login", { email, password }));
+    return acceptAuthResponse(result);
+  }, [acceptAuthResponse]);
+
+  const register = useCallback(async (fullName: string, email: string, password: string) => {
+    const result = await apiData<AuthResponse>(api.post("/auth/register", {
+      full_name: fullName, email, password,
+    }));
+    return acceptAuthResponse(result);
+  }, [acceptAuthResponse]);
 
   useEffect(() => {
-    if (!supabase) {
+    const token = getAccessToken();
+    if (!token) {
       setLoading(false);
       return;
     }
-    supabase.auth.getSession().then(async ({ data }) => {
-      setSession(data.session);
-      if (data.session) {
-        try {
-          const result = await apiData<UserProfile>(api.get("/auth/me"));
-          setProfile(result);
-        } catch {
-          setProfile(null);
-        }
-      }
-      setLoading(false);
-    });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      if (!nextSession) setProfile(null);
-    });
-    return () => listener.subscription.unsubscribe();
-  }, []);
+    setSession({ access_token: token });
+    refreshProfile()
+      .catch(() => undefined)
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [refreshProfile]);
 
   const value = useMemo<AuthValue>(() => ({
-    session, profile, loading, configured: Boolean(supabase), refreshProfile,
+    session, profile, loading, configured: true, refreshProfile, signIn, register,
     signOut: async () => {
-      if (!supabase) return;
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
+      clearAccessToken();
+      setSession(null);
       setProfile(null);
     },
-  }), [session, profile, loading]);
+  }), [session, profile, loading, refreshProfile, signIn, register]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

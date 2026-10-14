@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { forwardRef, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type * as React from "react";
 import { Link, Navigate, NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
@@ -30,9 +30,11 @@ export function EmptyState({ title, description, action }: { title: string; desc
   return <div className="empty-state"><div className="empty-icon"><BookOpen size={24} /></div><h3>{title}</h3><p>{description}</p>{action}</div>;
 }
 
-export function Field({ label, error, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { label: string; error?: string }) {
-  return <label className="field"><span>{label}</span><input {...props} />{error && <small className="field-error">{error}</small>}</label>;
-}
+export const Field = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement> & { label: string; error?: string }>(
+  function Field({ label, error, ...props }, ref) {
+    return <label className="field"><span>{label}</span><input ref={ref} {...props} />{error && <small className="field-error">{error}</small>}</label>;
+  },
+);
 
 export function TextArea({ label, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string }) {
   return <label className="field"><span>{label}</span><textarea rows={4} {...props} /></label>;
@@ -149,7 +151,7 @@ export function AuthGuard({ role }: { role: "student" | "admin" }) {
     }
   }, [session, profile, checking, refreshProfile]);
   if (loading) return <Loading />;
-  if (!configured) return <div className="container narrow-page"><Notice tone="error">Authentication is not configured yet. Add the Supabase URL and anon key to <code>frontend/.env</code>.</Notice></div>;
+  if (!configured) return <div className="container narrow-page"><Notice tone="error">Authentication is not configured yet. Check the API configuration.</Notice></div>;
   if (!session) return <NavigateToLogin />;
   if (error) return <div className="container narrow-page"><Notice tone="error">{error}</Notice></div>;
   if (!profile) return <Loading />;

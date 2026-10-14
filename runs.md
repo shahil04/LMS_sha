@@ -2,6 +2,9 @@
 
 These instructions are for Windows PowerShell. Keep the backend and frontend running in two separate terminal windows. Commands assume the project is at `C:\Users\hp\Documents\lms_sha`; change that path if you moved the folder.
 
+For detailed Supabase project, Auth, JWT signing-key, and environment-variable setup, see [docs/supabase-setup.md](docs/supabase-setup.md).
+For frontend/backend hosting steps, see [docs/host-frontend-backend.md](docs/host-frontend-backend.md).
+
 ## 1. Install prerequisites
 
 Install:
@@ -50,7 +53,7 @@ Copy-Item .env.example .env
 notepad .env
 ```
 
-For local SQLite, leave `DATABASE_URL=sqlite:///./shahil_academy.db`. Set `SUPABASE_URL` to your Supabase project URL, such as `https://your-project.supabase.co`. If your Supabase project uses legacy HS256 JWT signing, set `SUPABASE_JWT_SECRET` to the project's JWT secret; keep it only in the backend `.env`. With asymmetric signing keys, leave it blank so the API can verify tokens using Supabase's published JWKS.
+For local SQLite, leave `DATABASE_URL=sqlite:///./shahil_academy.db`. Set `JWT_SECRET_KEY` to a private random signing key, use `JWT_ALGORITHM=HS256`, and set `ACCESS_TOKEN_EXPIRE_MINUTES=60`. Keep the signing key only in the backend `.env` or the backend host's secret manager. Registration logs users in immediately and does not send verification email.
 
 Keep the default local CORS origin:
 
@@ -59,7 +62,7 @@ CORS_ORIGINS=http://localhost:5173
 APP_ENV=development
 ```
 
-Do not put database credentials, `SUPABASE_JWT_SECRET`, or the Supabase service-role key in frontend settings or commit them to source control.
+Do not put database credentials or `JWT_SECRET_KEY` in frontend settings or commit them to source control.
 
 ## 3. Create or update the database
 
@@ -107,15 +110,13 @@ Copy-Item .env.example .env
 notepad .env
 ```
 
-Set the three values:
+Set the API URL:
 
 ```dotenv
 VITE_API_URL=http://localhost:8000
-VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-supabase-anon-or-publishable-key
 ```
 
-Use the project URL and anon/publishable key from the Supabase project settings. These are frontend configuration values; never use the service-role key here. In Supabase Auth, configure the local site URL and allow the redirect URL `http://localhost:5173/reset-password`.
+The frontend calls the backend API for authentication and other data. Never expose the backend JWT signing key in frontend settings.
 
 ## 6. Start the website
 
@@ -125,14 +126,12 @@ From `C:\Users\hp\Documents\lms_sha\frontend`:
 npm run dev
 ```
 
-Open the local URL printed by Vite, normally [http://localhost:5173](http://localhost:5173). Keep this terminal open too. Public course pages can load when the API is running; account-related routes need valid Supabase configuration.
+Open the local URL printed by Vite, normally [http://localhost:5173](http://localhost:5173). Keep this terminal open too. Public course pages can load when the API is running; account routes need a configured backend JWT secret and an up-to-date database schema.
 
 ## 7. Create an administrator account
 
 1. Register a student account through the website.
-2. Verify the email if email confirmation is enabled in Supabase.
-3. Sign in once and visit `/student/dashboard`. This creates the matching database profile row.
-4. Using a trusted Supabase SQL editor or another authorized database connection, promote only the intended account:
+2. Using a trusted database connection, promote only the intended account:
 
 ```sql
 UPDATE profiles
@@ -184,7 +183,7 @@ In each terminal running a server, press `Ctrl+C`. The local SQLite database rem
 
 - **API will not start:** Check that `uv sync --extra dev` completed. Check `backend\.env` values and run `uv run alembic upgrade head`.
 - **Website cannot load courses:** Confirm the API is running at port 8000 and `VITE_API_URL=http://localhost:8000`. Restart Vite after changing `.env`.
-- **Supabase login fails:** Check the project URL and anon/publishable key, Auth email settings, and allowed redirect URLs. Restart Vite after editing `frontend\.env`.
-- **Authenticated API requests return 401:** Verify the token is from the configured Supabase project and the backend `SUPABASE_URL` is correct. For legacy HS256 projects, ensure `SUPABASE_JWT_SECRET` is set in the backend only.
+- **Login or registration fails:** Confirm the backend is running, `JWT_SECRET_KEY` is set in `backend\.env`, and `uv run alembic upgrade head` completed.
+- **Authenticated API requests return 401:** Sign in again to receive a fresh access token and verify `JWT_SECRET_KEY` and `JWT_ALGORITHM` match the backend values.
 - **Administrator is redirected away:** Confirm the matching `profiles` row exists, its `role` is `admin`, and sign in again to refresh the profile.
 - **Database schema is out of date:** In the backend terminal run `uv run alembic upgrade head`.

@@ -1,7 +1,16 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, HttpUrl
+
+
+class CredentialsInput(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+
+
+class RegisterInput(CredentialsInput):
+    full_name: str = Field(min_length=1, max_length=160)
 
 
 class ProfileUpdate(BaseModel):
@@ -96,4 +105,3 @@ class QuizSubmission(BaseModel):
 
 class ModelSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-

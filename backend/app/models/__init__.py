@@ -3,6 +3,7 @@ from app.models.entities import (
     AuditLog,
     Bookmark,
     Course,
+    CourseIdSequence,
     Doubt,
     DoubtReply,
     Enrollment,
@@ -17,8 +18,7 @@ from app.models.entities import (
 )
 
 __all__ = [
-    "Announcement", "AuditLog", "Bookmark", "Course", "Doubt", "DoubtReply",
+    "Announcement", "AuditLog", "Bookmark", "Course", "CourseIdSequence", "Doubt", "DoubtReply",
     "Enrollment", "Module", "Profile", "Question", "QuizAnswer", "QuizAttempt",
     "Topic", "TopicProgress", "TopicResource",
 ]
-

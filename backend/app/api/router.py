@@ -1,25 +1,90 @@
 import json
-from datetime import datetime, timezone
+import base64
+import hashlib
+import hmac
+import secrets
+import uuid
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_admin
+from app.core.config import settings
 from app.db.session import get_db
 from app.models import (
-    Announcement, AuditLog, Bookmark, Course, Doubt, DoubtReply, Enrollment,
+    Announcement, AuditLog, Bookmark, Course, CourseIdSequence, Doubt, DoubtReply, Enrollment,
     Module, Profile, Question, QuizAnswer, QuizAttempt, Topic, TopicProgress,
     TopicResource,
 )
 from app.schemas import (
-    AnnouncementInput, CourseInput, DoubtInput, EnrollmentInput, ModuleInput,
+    AnnouncementInput, CourseInput, CredentialsInput, DoubtInput, EnrollmentInput, ModuleInput,
     ProfileUpdate, QuestionInput, QuizSubmission, ReplyInput, ResourceInput,
-    TopicInput,
+    RegisterInput, TopicInput,
 )
 
 router = APIRouter(prefix="/api/v1")
+
+_PASSWORD_HASH_ITERATIONS = 600_000
+_PASSWORD_SALT_BYTES = 16
+
+
+def _password_hash(password: str) -> str:
+    salt = secrets.token_bytes(_PASSWORD_SALT_BYTES)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PASSWORD_HASH_ITERATIONS)
+    return "$".join((
+        "pbkdf2_sha256", str(_PASSWORD_HASH_ITERATIONS),
+        base64.b64encode(salt).decode(), base64.b64encode(digest).decode(),
+    ))
+
+
+def _verify_password(password: str, encoded: str | None) -> bool:
+    if not encoded:
+        return False
+    try:
+        scheme, iterations, salt, expected = encoded.split("$")
+        if scheme != "pbkdf2_sha256" or int(iterations) != _PASSWORD_HASH_ITERATIONS:
+            return False
+        salt_bytes = base64.b64decode(salt)
+        expected_bytes = base64.b64decode(expected)
+        if len(salt_bytes) != _PASSWORD_SALT_BYTES or len(expected_bytes) != 32:
+            return False
+        digest = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), salt_bytes, _PASSWORD_HASH_ITERATIONS,
+        )
+        return hmac.compare_digest(digest, expected_bytes)
+    except (ValueError, TypeError):
+        return False
+
+
+def _auth_response(profile: Profile) -> dict:
+    if not settings.jwt_secret_key:
+        raise HTTPException(status_code=503, detail="JWT_SECRET_KEY is not configured")
+    if settings.jwt_algorithm not in {"HS256", "HS384", "HS512"}:
+        raise HTTPException(status_code=503, detail="JWT_ALGORITHM must be an HMAC algorithm")
+    now = datetime.now(timezone.utc)
+    token = jwt.encode(
+        {
+            "sub": profile.id,
+            "email": profile.email,
+            "aud": "authenticated",
+            "iat": now,
+            "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
+        },
+        settings.jwt_secret_key,
+        algorithm=settings.jwt_algorithm,
+    )
+    return {"access_token": token, "token_type": "bearer", "profile": _profile_dict(profile)}
+
+
+def _ensure_jwt_configured() -> None:
+    if not settings.jwt_secret_key:
+        raise HTTPException(status_code=503, detail="JWT_SECRET_KEY is not configured")
+    if settings.jwt_algorithm not in {"HS256", "HS384", "HS512"}:
+        raise HTTPException(status_code=503, detail="JWT_ALGORITHM must be an HMAC algorithm")
 
 
 def _course_dict(course: Course) -> dict:
@@ -163,6 +228,39 @@ def _youtube_ref(url: str | None) -> tuple[str | None, str | None]:
 @router.get("/auth/me")
 def read_me(user: Profile = Depends(get_current_user)):
     return _profile_dict(user)
+
+
+@router.post("/auth/register", status_code=201)
+def register(payload: RegisterInput, db: Session = Depends(get_db)):
+    _ensure_jwt_configured()
+    email = str(payload.email).strip().lower()
+    full_name = payload.full_name.strip()
+    if not full_name:
+        raise HTTPException(status_code=422, detail="Full name cannot be blank")
+    if db.scalar(select(Profile).where(func.lower(Profile.email) == email)):
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+    profile = Profile(
+        id=str(uuid.uuid4()),
+        email=email,
+        full_name=full_name,
+        password_hash=_password_hash(payload.password),
+    )
+    db.add(profile)
+    db.commit()
+    db.refresh(profile)
+    return _auth_response(profile)
+
+
+@router.post("/auth/login")
+def login(payload: CredentialsInput, db: Session = Depends(get_db)):
+    _ensure_jwt_configured()
+    email = str(payload.email).strip().lower()
+    profile = db.scalar(select(Profile).where(func.lower(Profile.email) == email))
+    if profile is None or not _verify_password(payload.password, profile.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not profile.is_active:
+        raise HTTPException(status_code=403, detail="Account is inactive")
+    return _auth_response(profile)
 
 
 @router.patch("/auth/me")
@@ -575,11 +673,17 @@ def admin_courses(db: Session = Depends(get_db), admin: Profile = Depends(requir
 def create_course(payload: CourseInput, db: Session = Depends(get_db), admin: Profile = Depends(require_admin)):
     if db.scalar(select(Course).where(Course.slug == payload.slug)):
         raise HTTPException(status_code=409, detail="Course slug already exists")
+    next_id = db.execute(
+        update(CourseIdSequence)
+        .where(CourseIdSequence.id == 1)
+        .values(next_value=CourseIdSequence.next_value + 1)
+        .returning(CourseIdSequence.next_value)
+    ).scalar_one()
     values = payload.model_dump()
     values["thumbnail_url"] = str(values["thumbnail_url"]) if values["thumbnail_url"] else None
     if values["status"] == "published":
         values["published_at"] = datetime.now(timezone.utc)
-    course = Course(**values)
+    course = Course(id=f"c{next_id}", **values)
     db.add(course)
     db.flush()
     _audit(db, admin, "course.created", "course", course.id)

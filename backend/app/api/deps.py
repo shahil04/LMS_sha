@@ -1,9 +1,6 @@
-from functools import lru_cache
-
 import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jwt import PyJWKClient
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -13,39 +10,25 @@ from app.models import Profile
 bearer = HTTPBearer(auto_error=False)
 
 
-@lru_cache
-def _jwks_client() -> PyJWKClient:
-    if not settings.supabase_url:
-        raise RuntimeError("SUPABASE_URL is not configured")
-    return PyJWKClient(f"{settings.supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json")
-
-
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: Session = Depends(get_db),
 ) -> Profile:
     if credentials is None:
         raise HTTPException(status_code=401, detail="Authentication required")
+    if not settings.jwt_secret_key:
+        raise HTTPException(status_code=503, detail="JWT_SECRET_KEY is not configured")
+    if settings.jwt_algorithm not in {"HS256", "HS384", "HS512"}:
+        raise HTTPException(status_code=503, detail="JWT_ALGORITHM must be an HMAC algorithm")
     try:
-        if settings.supabase_jwt_secret:
-            claims = jwt.decode(
-                credentials.credentials,
-                settings.supabase_jwt_secret,
-                algorithms=["HS256"],
-                options={"require": ["sub", "exp"]},
-                audience="authenticated",
-            )
-        else:
-            signing_key = _jwks_client().get_signing_key_from_jwt(credentials.credentials).key
-            claims = jwt.decode(
-                credentials.credentials,
-                signing_key,
-                algorithms=["ES256", "RS256"],
-                audience="authenticated",
-                issuer=f"{settings.supabase_url.rstrip('/')}/auth/v1",
-                options={"require": ["sub", "exp"]},
-            )
-    except (jwt.PyJWTError, RuntimeError, ValueError) as exc:
+        claims = jwt.decode(
+            credentials.credentials,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+            options={"require": ["sub", "exp"]},
+            audience="authenticated",
+        )
+    except (jwt.PyJWTError, ValueError) as exc:
         raise HTTPException(status_code=401, detail="Invalid or expired access token") from exc
 
     subject = claims.get("sub")

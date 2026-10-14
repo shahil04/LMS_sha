@@ -24,9 +24,16 @@ class Profile(TimestampMixin, Base):
     __tablename__ = "profiles"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255))
     full_name: Mapped[str] = mapped_column(String(160), default="", nullable=False)
     role: Mapped[str] = mapped_column(String(20), default="student", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class CourseIdSequence(Base):
+    __tablename__ = "course_id_sequences"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    next_value: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class Course(TimestampMixin, Base):

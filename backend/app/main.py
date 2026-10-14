@@ -10,7 +10,7 @@ if settings.app_env.lower() == "production" and "*" in settings.allowed_origins:
 app = FastAPI(
     title="Shahil Academy API",
     version="1.0.0",
-    description="Learning platform API. Authentication is provided by Supabase Auth.",
+    description="Learning platform API with backend-managed JWT authentication.",
 )
 app.add_middleware(
     CORSMiddleware,

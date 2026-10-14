@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, apiData, errorMessage, type Course, type Doubt, type Module, type Topic } from "./api";
-import { supabase, useAuth } from "./auth";
+import { useAuth } from "./auth";
 import {
   Button, EmptyState, Field, FormShell, Loading, Notice, PageTitle, TextArea,
 } from "./ui";
@@ -124,72 +124,45 @@ export function PublicCoursePage() {
 
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(8) });
 const registerSchema = z.object({ full_name: z.string().min(1, "Enter your name"), email: z.string().email(), password: z.string().min(8, "Use at least 8 characters") });
-const emailSchema = z.object({ email: z.string().email() });
 
 export function AuthPage({ mode }: { mode: "login" | "register" | "forgot" }) {
   const navigate = useNavigate();
-  const { configured, refreshProfile } = useAuth();
-  const [notice, setNotice] = useState("");
+  const { configured, signIn, register } = useAuth();
   const [error, setError] = useState("");
-  const schema = mode === "register" ? registerSchema : mode === "forgot" ? emailSchema : loginSchema;
+  const schema = mode === "register" ? registerSchema : loginSchema;
   const form = useForm({ resolver: zodResolver(schema) });
   const submit = form.handleSubmit(async (values) => {
-    setError(""); setNotice("");
-    if (!supabase) { setError("Add your Supabase URL and anon key to frontend/.env, then restart the app."); return; }
+    setError("");
     try {
       const fields = values as { email: string; password?: string; full_name?: string };
       if (mode === "login") {
-        const { error: authError } = await supabase.auth.signInWithPassword({ email: fields.email, password: fields.password! });
-        if (authError) throw authError;
-        const profile = await refreshProfile();
+        const profile = await signIn(fields.email, fields.password!);
         navigate(profile?.role === "admin" ? "/admin/dashboard" : "/student/dashboard");
       } else if (mode === "register") {
-        const { error: authError } = await supabase.auth.signUp({
-          email: fields.email, password: fields.password!,
-          options: { data: { full_name: fields.full_name }, emailRedirectTo: `${window.location.origin}/student/dashboard` },
-        });
-        if (authError) throw authError;
-        setNotice("Account created. Check your email to verify it, then sign in.");
-      } else {
-        const { error: authError } = await supabase.auth.resetPasswordForEmail(fields.email, {
-          redirectTo: `${window.location.origin}/reset-password`,
-        });
-        if (authError) throw authError;
-        setNotice("If an account exists for that email, a password reset link has been sent.");
+        await register(fields.full_name!, fields.email, fields.password!);
+        navigate("/student/dashboard");
       }
     } catch (reason) { setError(errorMessage(reason)); }
   });
 
   const title = mode === "login" ? "Welcome back" : mode === "register" ? "Create your account" : "Reset your password";
-  const description = mode === "login" ? "Sign in to continue learning." : mode === "register" ? "Join Shahil Academy as a student." : "We’ll send a secure reset link to your email.";
+  const description = mode === "login" ? "Sign in to continue learning." : mode === "register" ? "Join Shahil Academy as a student." : "Contact an administrator if you need help recovering your account.";
   return <FormShell title={title} description={description} onSubmit={(event) => { void submit(event); }}>
-    {!configured && <Notice tone="error">Supabase is not configured. Set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code>.</Notice>}
-    {error && <Notice tone="error">{error}</Notice>}{notice && <Notice tone="success">{notice}</Notice>}
+    {!configured && <Notice tone="error">The API is not configured.</Notice>}
+    {error && <Notice tone="error">{error}</Notice>}
     {mode === "register" && <Field label="Full name" placeholder="Your name" autoComplete="name" {...form.register("full_name")} />}
-    <Field label="Email address" type="email" placeholder="you@example.com" autoComplete="email" {...form.register("email")} />
+    {mode !== "forgot" && <Field label="Email address" type="email" placeholder="you@example.com" autoComplete="email" {...form.register("email")} />}
     {mode !== "forgot" && <Field label="Password" type="password" placeholder="At least 8 characters" autoComplete={mode === "login" ? "current-password" : "new-password"} {...form.register("password")} />}
+    {mode === "forgot" && <Notice>Password recovery by email is not available. Contact an administrator for help.</Notice>}
     {Object.values(form.formState.errors).map((item, index) => <small className="field-error" key={index}>{String(item?.message)}</small>)}
-    <Button type="submit" disabled={form.formState.isSubmitting}>{form.formState.isSubmitting ? "Please wait…" : mode === "login" ? "Sign in" : mode === "register" ? "Create account" : "Send reset link"}</Button>
+    {mode !== "forgot" && <Button type="submit" disabled={form.formState.isSubmitting}>{form.formState.isSubmitting ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}</Button>}
     <div className="form-foot">{mode === "login" ? <>New here? <Link to="/register">Create an account</Link><br /><Link to="/forgot-password">Forgot password?</Link></> :
       mode === "register" ? <>Already have an account? <Link to="/login">Sign in</Link></> : <Link to="/login">Back to sign in</Link>}</div>
   </FormShell>;
 }
 
 export function ResetPasswordPage() {
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
-  const form = useForm({ resolver: zodResolver(z.object({ password: z.string().min(8) })) });
-  const submit = form.handleSubmit(async ({ password }) => {
-    setNotice(""); setError("");
-    if (!supabase) { setError("Supabase is not configured."); return; }
-    const { error: result } = await supabase.auth.updateUser({ password });
-    if (result) setError(result.message); else setNotice("Password updated. You can now sign in.");
-  });
-  return <FormShell title="Choose a new password" description="Use at least 8 characters for your new password." onSubmit={(event) => { void submit(event); }}>
-    {error && <Notice tone="error">{error}</Notice>}{notice && <Notice tone="success">{notice}</Notice>}
-    <Field label="New password" type="password" autoComplete="new-password" {...form.register("password")} />
-    {form.formState.errors.password && <small className="field-error">{String(form.formState.errors.password.message)}</small>}
-    <Button type="submit" disabled={form.formState.isSubmitting}>Update password</Button>
+  return <FormShell title="Account recovery" description="Email recovery is not configured. Contact an administrator to regain access." onSubmit={(event) => event.preventDefault()}>
     <div className="form-foot"><Link to="/login">Back to sign in</Link></div>
   </FormShell>;
 }
@@ -197,8 +170,8 @@ export function ResetPasswordPage() {
 export function InfoPage({ page }: { page: "about" | "contact" | "privacy" | "terms" }) {
   const content = {
     about: ["About Shahil Academy", "We’re building a focused online learning space where students can follow structured courses, practice what they learn, and ask for help when they need it.", "Our approach", "Lessons are organized into courses, modules, and topics. Students can track their progress and use course resources at their own pace. Course availability depends on enrollment."],
-    contact: ["Contact and support", "For enrollment, course access, or learning support, contact the academy through the support channel shared with you by your administrator.", "Need account help?", "Use the password recovery link on the sign-in page. Never send your password or authentication codes to anyone."],
-    privacy: ["Privacy policy", "Shahil Academy uses account and learning information to provide course access, save progress, answer doubts, and operate the platform.", "Information and access", "Student records and course activity are available only to the student and authorized administrators for legitimate learning and support purposes. Authentication is handled by Supabase. Contact the academy to ask about your account data."],
+    contact: ["Contact and support", "For enrollment, course access, or learning support, contact the academy through the support channel shared with you by your administrator.", "Need account help?", "Contact an administrator if you lose access. Never send your password or authentication codes to anyone."],
+    privacy: ["Privacy policy", "Shahil Academy uses account and learning information to provide course access, save progress, answer doubts, and operate the platform.", "Information and access", "Student records and course activity are available only to the student and authorized administrators for legitimate learning and support purposes. Contact the academy to ask about your account data."],
     terms: ["Terms and conditions", "Use your own account and keep your sign-in credentials secure. Course materials are provided for enrolled learners and should not be redistributed without permission.", "Course access", "Course access is managed by the academy and may be changed by an authorized administrator. Availability of third-party links or video services is subject to those providers."],
   }[page];
   return <div className="container text-page"><span className="eyebrow">Shahil Academy</span><h1>{content[0]}</h1><p>{content[1]}</p><h2>{content[2]}</h2><p>{content[3]}</p>{page === "contact" && <Link className="button button-primary" to="/courses">Explore courses</Link>}</div>;
@@ -505,7 +478,8 @@ export function AdminResourcePage({ resource }: { resource: string }) {
   const list = useQuery({ queryKey: ["admin-list", resource, search], queryFn: () => apiData<Record<string, unknown>[]>(api.get(listEndpoint!)), enabled: Boolean(listEndpoint) });
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setError(""); setNotice("");
-    const values: Record<string, unknown> = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const form = event.currentTarget;
+    const values: Record<string, unknown> = Object.fromEntries(new FormData(form).entries());
     const save = (data: Record<string, unknown>) => editing
       ? api.patch(`${config!.endpoint}/${String(editing.id)}`, data)
       : api.post(config!.endpoint, data);
@@ -544,7 +518,7 @@ export function AdminResourcePage({ resource }: { resource: string }) {
       }
       setNotice(editing ? "Changes saved." : "Saved successfully.");
       setEditing(null);
-      event.currentTarget.reset();
+      form.reset();
       await queryClient.invalidateQueries({ queryKey: ["admin-list", resource] });
       if (resource === "courses") await queryClient.invalidateQueries({ queryKey: ["admin-dashboard"] });
     } catch (reason) { setError(errorMessage(reason)); }
@@ -579,7 +553,7 @@ export function AdminResourcePage({ resource }: { resource: string }) {
     options: resource === "questions" && Array.isArray(editing.options) ? editing.options.join(", ") : editing.options,
     course_id: editing.course_id || "",
   } : {};
-  if (resource === "settings") return <><PageTitle eyebrow="Configuration" title="Settings" description="Platform configuration guidance." /><div className="callout"><h3>Authentication and storage</h3><p>Configure Supabase Auth and production origins through deployment environment settings. File uploads are not enabled until a private object-storage provider is configured. Never place service-role keys in the frontend.</p></div></>;
+  if (resource === "settings") return <><PageTitle eyebrow="Configuration" title="Settings" description="Platform configuration guidance." /><div className="callout"><h3>Authentication and storage</h3><p>Configure JWT signing and production origins through backend deployment environment settings. File uploads are not enabled until a private object-storage provider is configured. Never place JWT signing keys or database credentials in the frontend.</p></div></>;
   const columns = resource === "enrollments" ? ["id", "student_id", "student_email", "course_id", "course_title", "status", "expires_at"] :
     resource === "students" ? ["id", "full_name", "email", "is_active", "created_at"] :
       resource === "doubts" ? ["student_name", "topic_title", "message", "status"] :

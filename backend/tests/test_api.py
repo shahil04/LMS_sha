@@ -5,10 +5,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.models import Course, Enrollment, Module, Profile, Question, Topic, TopicResource
+from app.models import Course, CourseIdSequence, Enrollment, Module, Profile, Question, Topic, TopicResource
 
 engine = create_engine(
     "sqlite://",
@@ -60,7 +61,10 @@ def setup_module():
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
     with TestingSession() as session:
-        session.add_all([student, admin, course, module, topic, question, published_resource, draft_resource])
+        session.add_all([
+            student, admin, course, module, topic, question, published_resource, draft_resource,
+            CourseIdSequence(id=1, next_value=0),
+        ])
         session.commit()
 
 
@@ -86,6 +90,21 @@ def test_public_course_outline_does_not_expose_video_reference():
     public_topic = response.json()["modules"][0]["topics"][0]
     assert "video_ref" not in public_topic
     assert "video_provider" not in public_topic
+
+
+def test_admin_course_creation_assigns_sequential_ids():
+    app.dependency_overrides[get_current_user] = lambda: admin
+    first = client.post("/api/v1/admin/courses", json={
+        "title": "Python One", "slug": "python-one", "status": "draft",
+    })
+    second = client.post("/api/v1/admin/courses", json={
+        "title": "Python Two", "slug": "python-two", "status": "draft",
+    })
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["id"] == "c1"
+    assert second.json()["id"] == "c2"
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_student_cannot_use_admin_endpoint():
@@ -200,3 +219,56 @@ def test_youtube_input_is_host_and_id_validated():
         assert error.status_code == 422
     else:
         raise AssertionError("Untrusted video host was accepted")
+
+
+def test_registration_returns_token_without_email_verification(monkeypatch):
+    import uuid
+
+    monkeypatch.setattr(settings, "jwt_secret_key", "test-secret-key-with-at-least-32-bytes")
+    monkeypatch.setattr(settings, "jwt_algorithm", "HS256")
+    email = f"{uuid.uuid4()}@example.com"
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"full_name": "New Student", "email": email, "password": "password123"},
+    )
+
+    assert response.status_code == 201
+    auth = response.json()
+    assert auth["token_type"] == "bearer"
+    assert auth["profile"]["email"] == email
+    assert "password_hash" not in auth["profile"]
+    current_user = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {auth['access_token']}"},
+    )
+    assert current_user.status_code == 200
+    assert current_user.json()["email"] == email
+
+
+def test_login_checks_password_and_duplicate_registration(monkeypatch):
+    import uuid
+
+    monkeypatch.setattr(settings, "jwt_secret_key", "test-secret-key-with-at-least-32-bytes")
+    monkeypatch.setattr(settings, "jwt_algorithm", "HS256")
+    email = f"{uuid.uuid4()}@example.com"
+    registration = client.post(
+        "/api/v1/auth/register",
+        json={"full_name": "New Student", "email": email, "password": "password123"},
+    )
+    assert registration.status_code == 201
+
+    bad_login = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "wrong-password"},
+    )
+    assert bad_login.status_code == 401
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "password123"},
+    )
+    assert login.status_code == 200
+    duplicate = client.post(
+        "/api/v1/auth/register",
+        json={"full_name": "Another Student", "email": email, "password": "password123"},
+    )
+    assert duplicate.status_code == 409
